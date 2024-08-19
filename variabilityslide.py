@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.metrics import mean_squared_error, r2_score
 
 # Function to calculate basic statistics
 def calculate_statistics(prices):
@@ -148,15 +151,44 @@ def main():
         volatility = calculate_volatility(high_prices, low_prices)
         volatilities.append(volatility)
 
-    # Convert list of all statistics arrays and volatilities to final numpy arrays for further use
+    # Convert lists to numpy arrays
     all_statistics_matrix = np.array(all_statistics_arrays)
     volatility_vector = np.array(volatilities)
 
-    # Display the shape of the final matrix and volatility vector, and the first few rows as a sample
-    print("All Statistics Matrix Shape:", all_statistics_matrix.shape)
-    print("Volatility Vector Shape:", volatility_vector.shape)
-    print("Sample of Statistics Matrix (first 2 rows):\n", all_statistics_matrix[:2])
-    print("Sample of Volatility Vector (first 2 values):\n", volatility_vector[:2])
+    # Initialize a list for the final feature vectors (features + label)
+    feature_vectors = []
+
+    # Build feature vectors with [features... label], excluding the first and last chunk to avoid index issues
+    for i in range(1, num_chunks - 1):
+        features = all_statistics_matrix[i]
+        label = volatility_vector[i + 1]
+        feature_vector = np.hstack([features, label])
+        feature_vectors.append(feature_vector)
+
+    # Convert the list of feature vectors to a numpy array
+    feature_matrix = np.array(feature_vectors)
+
+    # Split feature matrix into features (X) and labels (y)
+    X = feature_matrix[:, :-1]  # All columns except the last (features)
+    y = feature_matrix[:, -1]   # The last column (label)
+
+    # Split data into training and testing sets (80% train, 20% test)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+    # Train a decision tree regressor
+    model = DecisionTreeRegressor(random_state=42)
+    model.fit(X_train, y_train)
+
+    # Make predictions on the test set
+    y_pred = model.predict(X_test)
+
+    # Calculate performance metrics
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    # Output the model's performance
+    print(f"Mean Squared Error (MSE): {mse:.4f}")
+    print(f"R-squared (R2): {r2:.4f}")
 
 main()
 
