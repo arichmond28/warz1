@@ -136,33 +136,31 @@ def main():
     dates = df[date_column]
     df = df.drop(df.columns[0], axis=1)
 
-    # Initialize an empty list to store the numpy arrays
-    numpy_arrays = []
+    # Initialize lists to store calculated data
     all_statistics_arrays = []
     volatilities = []
     date_ranges = []
 
-    # Loop over the range of chunks
-    for i in range(num_chunks):
+    # Precompute volatilities for the entire dataset
+    for i in range(num_chunks - 1):  # Exclude the last chunk since there's no subsequent period
         # Slice the dataframe to get 10 rows and convert them to a numpy array
         chunk = df.iloc[i*10:(i+1)*10].values
-        numpy_arrays.append(chunk)
-        
+        next_chunk = df.iloc[(i+1)*10:(i+2)*10].values
+
         # Process the chunk and calculate all statistics except volatility
         statistics_vector = process_chunk(chunk)
         all_statistics_arrays.append(statistics_vector)
         
-        # Calculate and store volatility separately
-        high_prices = chunk[:, 1]
-        low_prices = chunk[:, 2]
+        # Calculate and store volatility for the subsequent 10-day period
+        high_prices = next_chunk[:, 1]
+        low_prices = next_chunk[:, 2]
         volatility = calculate_volatility(high_prices, low_prices)
         volatilities.append(volatility)
         
-        # Store the date range for this chunk
-        if i < num_chunks - 1:
-            start_date = dates.iloc[(i+1)*10]
-            end_date = dates.iloc[(i+2)*10 - 1]
-            date_ranges.append(f"{start_date} to {end_date}")
+        # Store the date range for this chunk (corresponding to the period used to calculate features)
+        start_date = dates.iloc[i*10]
+        end_date = dates.iloc[(i+1)*10 - 1]
+        date_ranges.append(f"{start_date} to {end_date}")
 
     # Convert lists to numpy arrays
     all_statistics_matrix = np.array(all_statistics_arrays)
@@ -171,10 +169,10 @@ def main():
     # Initialize a list for the final feature vectors (features + label)
     feature_vectors = []
 
-    # Build feature vectors with [features... label], excluding the first and last chunk to avoid index issues
-    for i in range(1, num_chunks - 2):
+    # Build feature vectors with [features... label]
+    for i in range(len(all_statistics_matrix)):
         features = all_statistics_matrix[i]
-        label = volatility_vector[i + 1]
+        label = volatility_vector[i]
         feature_vector = np.hstack([features, label])
         feature_vectors.append(feature_vector)
 
@@ -185,41 +183,10 @@ def main():
     X = feature_matrix[:, :-1]  # All columns except the last (features)
     y = feature_matrix[:, -1]   # The last column (label)
 
-    # Split data into training and testing sets (80% train, 20% test)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-    # Define hyperparameter grids for each model
-    param_grids = {
-        'DecisionTree': {
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5, 10]
-        },
-        'RandomForest': {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5, 10]
-        },
-        'GradientBoosting': {
-            'n_estimators': [50, 100, 200],
-            'learning_rate': [0.01, 0.1, 0.2],
-            'max_depth': [3, 5, 10]
-        },
-        'AdaBoost': {
-            'n_estimators': [50, 100, 200],
-            'learning_rate': [0.01, 0.1, 1.0]
-        },
-        'Bagging': {
-            'n_estimators': [10, 50, 100],
-            'max_samples': [0.5, 1.0],
-            'max_features': [0.5, 1.0]
-        },
-        'ExtraTrees': {
-            'n_estimators': [50, 100, 200],
-            'max_depth': [10, 20, None],
-            'min_samples_split': [2, 5, 10]
-        },
-        'LinearRegression': {}  # No hyperparameters to tune for linear regression
-    }
+    # Split data into training and testing sets (80% train, 20% test), with a fixed random state
+    X_train, X_test, y_train, y_test, date_train, date_test = train_test_split(
+        X, y, date_ranges, test_size=0.2, random_state=42
+    )
 
     # Models to evaluate
     models = {
@@ -232,44 +199,32 @@ def main():
         'LinearRegression': LinearRegression()
     }
 
+    # Define hyperparameter grids for each model (you can expand this as needed)
+    param_grids = {
+        'DecisionTree': {'max_depth': [10, 20, None], 'min_samples_split': [2, 5, 10]},
+        'RandomForest': {'n_estimators': [50, 100, 200], 'max_depth': [10, 20, None]},
+        # Add more parameter grids as needed for each model
+    }
+
     # Store the results for predicted vs. actual volatilities
     results = []
 
-    # Loop through each model, run RFE (if possible), GridSearchCV, and evaluate
+    # Loop through each model, train it, and make predictions
     for name, model in models.items():
-        print(f"Running optimization for {name}...")
-
-        # Only run RFE if the model supports feature importances
-        if hasattr(model, "feature_importances_") or name == "LinearRegression":
-            print(f"Running RFE for {name}...")
-            selector = RFE(model, n_features_to_select=10)  # Select top 10 features
-            X_train_rfe = selector.fit_transform(X_train, y_train)
-            X_test_rfe = selector.transform(X_test)
-        else:
-            # Skip RFE for models like Bagging that don't have feature importances
-            print(f"Skipping RFE for {name} due to lack of feature importances...")
-            X_train_rfe = X_train
-            X_test_rfe = X_test
+        print(f"Running model: {name}")
 
         # If the model has hyperparameters to tune, use GridSearchCV
-        if name in param_grids and param_grids[name]:
+        if name in param_grids:
             grid_search = GridSearchCV(model, param_grids[name], cv=5, scoring='neg_mean_squared_error')
-            grid_search.fit(X_train_rfe, y_train)
+            grid_search.fit(X_train, y_train)
             best_model = grid_search.best_estimator_
             print(f"Best hyperparameters for {name}: {grid_search.best_params_}")
         else:
             # If no hyperparameters to tune (e.g., LinearRegression), just fit the model
-            best_model = model.fit(X_train_rfe, y_train)
+            best_model = model.fit(X_train, y_train)
 
-        # Cross-validation using K-Fold
-        print(f"Running K-Fold Cross-Validation for {name}...")
-        kfold = KFold(n_splits=5)
-        cv_results = cross_val_score(best_model, X_train_rfe, y_train, cv=kfold, scoring='neg_mean_squared_error')
-        print(f"Cross-Validation Results for {name}: Mean MSE = {-np.mean(cv_results):.4f}, Std MSE = {np.std(cv_results):.4f}")
-
-        # Train the best model and make predictions
-        best_model.fit(X_train_rfe, y_train)
-        y_pred = best_model.predict(X_test_rfe)
+        # Make predictions using the trained model
+        y_pred = best_model.predict(X_test)
 
         # Model Evaluation
         mse = mean_squared_error(y_test, y_pred)
@@ -278,24 +233,24 @@ def main():
         r2 = r2_score(y_test, y_pred)
         mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
 
-        print(f"{name} Model Performance after Optimization:")
-        print(f"  Mean Squared Error (MSE): {mse:.4f}")
-        print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
-        print(f"  Mean Absolute Error (MAE): {mae:.4f}")
-        print(f"  Mean Absolute Percentage Error (MAPE): {mape:.2f}%")
-        print(f"  R-squared (R2): {r2:.4f}")
+        print(f"{name} Model Performance:")
+        print(f"  MSE: {mse:.4f}")
+        print(f"  RMSE: {rmse:.4f}")
+        print(f"  MAE: {mae:.4f}")
+        print(f"  MAPE: {mape:.2f}%")
+        print(f"  R2: {r2:.4f}")
         print("-" * 40)
 
         # Append predicted vs actual along with date range and model name
-        for actual, predicted, date_range in zip(y_test, y_pred, date_ranges[-len(y_test):]):
+        for actual, predicted, date_range in zip(y_test, y_pred, date_test):
             results.append([date_range, actual, predicted, name])
 
     # Create a DataFrame from the results and save to CSV
     results_df = pd.DataFrame(results, columns=["Date Range", "Actual Volatility", "Predicted Volatility", "Model"])
     results_df.to_csv("predicted_vs_actual_volatility_optimized.csv", index=False)
 
-    print("Optimized Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
-
+    print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
+    
 main()
 
 
