@@ -157,9 +157,10 @@ def main():
         volatilities.append(volatility)
         
         # Store the date range for this chunk
-        start_date = dates.iloc[i*10]
-        end_date = dates.iloc[(i+1)*10 - 1]
-        date_ranges.append(f"{start_date} to {end_date}")
+        if i < num_chunks - 1:
+            start_date = dates.iloc[(i+1)*10]
+            end_date = dates.iloc[(i+2)*10 - 1]
+            date_ranges.append(f"{start_date} to {end_date}")
 
     # Convert lists to numpy arrays
     all_statistics_matrix = np.array(all_statistics_arrays)
@@ -169,7 +170,7 @@ def main():
     feature_vectors = []
 
     # Build feature vectors with [features... label], excluding the first and last chunk to avoid index issues
-    for i in range(1, num_chunks - 1):
+    for i in range(1, num_chunks - 2):
         features = all_statistics_matrix[i]
         label = volatility_vector[i + 1]
         feature_vector = np.hstack([features, label])
@@ -210,8 +211,6 @@ def main():
         mae = mean_absolute_error(y_test, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_test, y_pred)
-        
-        # Calculate mean absolute percentage error (MAPE)
         mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
 
         print(f"{name} Model Performance:")
@@ -222,12 +221,12 @@ def main():
         print(f"  R-squared (R2): {r2:.4f}")
         print("-" * 40)
 
-        # Append predicted vs actual along with date range
+        # Append predicted vs actual along with date range and model name
         for actual, predicted, date_range in zip(y_test, y_pred, date_test):
-            results.append([date_range, actual, predicted])
+            results.append([date_range, actual, predicted, name])
 
     # Create a DataFrame from the results and save to CSV
-    results_df = pd.DataFrame(results, columns=["Date Range", "Actual Volatility", "Predicted Volatility"])
+    results_df = pd.DataFrame(results, columns=["Date Range", "Actual Volatility", "Predicted Volatility", "Model"])
     results_df.to_csv("predicted_vs_actual_volatility.csv", index=False)
 
     print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility.csv'.")
