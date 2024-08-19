@@ -3,7 +3,9 @@ import numpy as np
 from scipy.stats import skew, kurtosis
 from sklearn.model_selection import train_test_split
 from sklearn.tree import DecisionTreeRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, ExtraTreesRegressor, BaggingRegressor
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.linear_model import LinearRegression
 
 # Function to calculate basic statistics
 def calculate_statistics(prices):
@@ -175,20 +177,39 @@ def main():
     # Split data into training and testing sets (80% train, 20% test)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-    # Train a decision tree regressor
-    model = DecisionTreeRegressor(random_state=42)
-    model.fit(X_train, y_train)
+    # Initialize models
+    models = {
+        'DecisionTree': DecisionTreeRegressor(),
+        'RandomForest': RandomForestRegressor(),
+        'GradientBoosting': GradientBoostingRegressor(),
+        'AdaBoost': AdaBoostRegressor(),
+        'Bagging': BaggingRegressor(),
+        'ExtraTrees': ExtraTreesRegressor(),
+        'LinearRegression': LinearRegression()
+    }
 
-    # Make predictions on the test set
-    y_pred = model.predict(X_test)
+    # Loop through each model, train it, and output statistics
+    for name, model in models.items():
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        
+        mse = mean_squared_error(y_test, y_pred)
+        mae = mean_absolute_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(y_test, y_pred)
+        
+        # Calculate mean absolute percentage error (MAPE)
+        mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
 
-    # Calculate performance metrics
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-
-    # Output the model's performance
-    print(f"Mean Squared Error (MSE): {mse:.4f}")
-    print(f"R-squared (R2): {r2:.4f}")
+        print(f"{name} Model Performance:")
+        print(f"  Mean Squared Error (MSE): {mse:.4f}")
+        print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
+        print(f"  Mean Absolute Error (MAE): {mae:.4f}")
+        print(f"  Mean Absolute Percentage Error (MAPE): {mape:.2f}%")
+        print(f"  R-squared (R2): {r2:.4f}")
+        print("-" * 40)
 
 main()
+
+
 
