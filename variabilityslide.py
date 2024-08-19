@@ -130,12 +130,15 @@ def main():
     num_chunks = len(df) // 10
 
     # Drop the first column if it's not needed (like a date column)
+    date_column = df.columns[0]
+    dates = df[date_column]
     df = df.drop(df.columns[0], axis=1)
 
     # Initialize an empty list to store the numpy arrays
     numpy_arrays = []
     all_statistics_arrays = []
     volatilities = []
+    date_ranges = []
 
     # Loop over the range of chunks
     for i in range(num_chunks):
@@ -152,6 +155,11 @@ def main():
         low_prices = chunk[:, 2]
         volatility = calculate_volatility(high_prices, low_prices)
         volatilities.append(volatility)
+        
+        # Store the date range for this chunk
+        start_date = dates.iloc[i*10]
+        end_date = dates.iloc[(i+1)*10 - 1]
+        date_ranges.append(f"{start_date} to {end_date}")
 
     # Convert lists to numpy arrays
     all_statistics_matrix = np.array(all_statistics_arrays)
@@ -175,7 +183,9 @@ def main():
     y = feature_matrix[:, -1]   # The last column (label)
 
     # Split data into training and testing sets (80% train, 20% test)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+    X_train, X_test, y_train, y_test, date_train, date_test = train_test_split(
+        X, y, date_ranges[1:-1], test_size=0.2
+    )
 
     # Initialize models
     models = {
@@ -187,6 +197,9 @@ def main():
         'ExtraTrees': ExtraTreesRegressor(),
         'LinearRegression': LinearRegression()
     }
+
+    # Store the results for predicted vs. actual volatilities
+    results = []
 
     # Loop through each model, train it, and output statistics
     for name, model in models.items():
@@ -209,7 +222,18 @@ def main():
         print(f"  R-squared (R2): {r2:.4f}")
         print("-" * 40)
 
+        # Append predicted vs actual along with date range
+        for actual, predicted, date_range in zip(y_test, y_pred, date_test):
+            results.append([date_range, actual, predicted])
+
+    # Create a DataFrame from the results and save to CSV
+    results_df = pd.DataFrame(results, columns=["Date Range", "Actual Volatility", "Predicted Volatility"])
+    results_df.to_csv("predicted_vs_actual_volatility.csv", index=False)
+
+    print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility.csv'.")
+
 main()
+
 
 
 
