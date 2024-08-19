@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, ExtraTreesRegressor, BaggingRegressor
-from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from sklearn.linear_model import LinearRegression
+from sklearn.feature_selection import RFE
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+from sklearn.model_selection import KFold
 
 # Function to calculate basic statistics
 def calculate_statistics(prices):
@@ -184,11 +186,42 @@ def main():
     y = feature_matrix[:, -1]   # The last column (label)
 
     # Split data into training and testing sets (80% train, 20% test)
-    X_train, X_test, y_train, y_test, date_train, date_test = train_test_split(
-        X, y, date_ranges[1:-1], test_size=0.2
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-    # Initialize models
+    # Define hyperparameter grids for each model
+    param_grids = {
+        'DecisionTree': {
+            'max_depth': [10, 20, None],
+            'min_samples_split': [2, 5, 10]
+        },
+        'RandomForest': {
+            'n_estimators': [50, 100, 200],
+            'max_depth': [10, 20, None],
+            'min_samples_split': [2, 5, 10]
+        },
+        'GradientBoosting': {
+            'n_estimators': [50, 100, 200],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'max_depth': [3, 5, 10]
+        },
+        'AdaBoost': {
+            'n_estimators': [50, 100, 200],
+            'learning_rate': [0.01, 0.1, 1.0]
+        },
+        'Bagging': {
+            'n_estimators': [10, 50, 100],
+            'max_samples': [0.5, 1.0],
+            'max_features': [0.5, 1.0]
+        },
+        'ExtraTrees': {
+            'n_estimators': [50, 100, 200],
+            'max_depth': [10, 20, None],
+            'min_samples_split': [2, 5, 10]
+        },
+        'LinearRegression': {}  # No hyperparameters to tune for linear regression
+    }
+
+    # Models to evaluate
     models = {
         'DecisionTree': DecisionTreeRegressor(),
         'RandomForest': RandomForestRegressor(),
@@ -202,18 +235,50 @@ def main():
     # Store the results for predicted vs. actual volatilities
     results = []
 
-    # Loop through each model, train it, and output statistics
+    # Loop through each model, run RFE (if possible), GridSearchCV, and evaluate
     for name, model in models.items():
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        
+        print(f"Running optimization for {name}...")
+
+        # Only run RFE if the model supports feature importances
+        if hasattr(model, "feature_importances_") or name == "LinearRegression":
+            print(f"Running RFE for {name}...")
+            selector = RFE(model, n_features_to_select=10)  # Select top 10 features
+            X_train_rfe = selector.fit_transform(X_train, y_train)
+            X_test_rfe = selector.transform(X_test)
+        else:
+            # Skip RFE for models like Bagging that don't have feature importances
+            print(f"Skipping RFE for {name} due to lack of feature importances...")
+            X_train_rfe = X_train
+            X_test_rfe = X_test
+
+        # If the model has hyperparameters to tune, use GridSearchCV
+        if name in param_grids and param_grids[name]:
+            grid_search = GridSearchCV(model, param_grids[name], cv=5, scoring='neg_mean_squared_error')
+            grid_search.fit(X_train_rfe, y_train)
+            best_model = grid_search.best_estimator_
+            print(f"Best hyperparameters for {name}: {grid_search.best_params_}")
+        else:
+            # If no hyperparameters to tune (e.g., LinearRegression), just fit the model
+            best_model = model.fit(X_train_rfe, y_train)
+
+        # Cross-validation using K-Fold
+        print(f"Running K-Fold Cross-Validation for {name}...")
+        kfold = KFold(n_splits=5)
+        cv_results = cross_val_score(best_model, X_train_rfe, y_train, cv=kfold, scoring='neg_mean_squared_error')
+        print(f"Cross-Validation Results for {name}: Mean MSE = {-np.mean(cv_results):.4f}, Std MSE = {np.std(cv_results):.4f}")
+
+        # Train the best model and make predictions
+        best_model.fit(X_train_rfe, y_train)
+        y_pred = best_model.predict(X_test_rfe)
+
+        # Model Evaluation
         mse = mean_squared_error(y_test, y_pred)
         mae = mean_absolute_error(y_test, y_pred)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_test, y_pred)
         mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
 
-        print(f"{name} Model Performance:")
+        print(f"{name} Model Performance after Optimization:")
         print(f"  Mean Squared Error (MSE): {mse:.4f}")
         print(f"  Root Mean Squared Error (RMSE): {rmse:.4f}")
         print(f"  Mean Absolute Error (MAE): {mae:.4f}")
@@ -222,14 +287,14 @@ def main():
         print("-" * 40)
 
         # Append predicted vs actual along with date range and model name
-        for actual, predicted, date_range in zip(y_test, y_pred, date_test):
+        for actual, predicted, date_range in zip(y_test, y_pred, date_ranges[-len(y_test):]):
             results.append([date_range, actual, predicted, name])
 
     # Create a DataFrame from the results and save to CSV
     results_df = pd.DataFrame(results, columns=["Date Range", "Actual Volatility", "Predicted Volatility", "Model"])
-    results_df.to_csv("predicted_vs_actual_volatility.csv", index=False)
+    results_df.to_csv("predicted_vs_actual_volatility_optimized.csv", index=False)
 
-    print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility.csv'.")
+    print("Optimized Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
 
 main()
 
