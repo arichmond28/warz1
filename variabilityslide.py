@@ -1,11 +1,12 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 from xgboost import XGBRegressor
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, BaggingRegressor, ExtraTreesRegressor
+from lightgbm import LGBMRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 
 # Function to calculate basic statistics
@@ -53,6 +54,34 @@ def calculate_rsi(prices, window_size=14):
     rsi = 100 - (100 / (1 + rs))
     return np.array([rsi])
 
+# Function to calculate MACD
+def calculate_macd(prices, short_window=12, long_window=26, signal_window=9):
+    # Calculate short and long-term exponential moving averages (EMA)
+    short_ema = calculate_moving_average(prices, short_window)
+    long_ema = calculate_moving_average(prices, long_window)
+    
+    # Align the lengths of short_ema and long_ema by trimming to the same length
+    min_length = min(len(short_ema), len(long_ema))
+    short_ema = short_ema[-min_length:]
+    long_ema = long_ema[-min_length:]
+    
+    # Calculate the MACD line
+    macd = short_ema - long_ema
+    
+    # Calculate the signal line (EMA of the MACD line)
+    signal_line = calculate_moving_average(macd, signal_window)
+    
+    # Align lengths of MACD and signal_line
+    min_length_macd_signal = min(len(macd), len(signal_line))
+    macd = macd[-min_length_macd_signal:]
+    signal_line = signal_line[-min_length_macd_signal:]
+    
+    # Calculate the MACD histogram
+    macd_histogram = macd - signal_line
+    
+    return np.hstack([macd, signal_line, macd_histogram])
+
+
 # Function to calculate Bollinger Bands
 def calculate_bollinger_bands(prices, window_size=20, num_std_dev=2):
     moving_avg = calculate_moving_average(prices, window_size)
@@ -96,8 +125,9 @@ def process_chunk(chunk):
     
     rsi = calculate_rsi(close_prices, window_size=10)
     bollinger_bands = calculate_bollinger_bands(close_prices, window_size=10, num_std_dev=2)
-    vwap = calculate_vwap(close_prices, volumes)
+    macd = calculate_macd(close_prices)
     
+    vwap = calculate_vwap(close_prices, volumes)
     volume_oscillator = calculate_volume_oscillator(volumes, short_window=5, long_window=10)
     
     all_statistics = np.hstack([
@@ -112,6 +142,7 @@ def process_chunk(chunk):
         moving_avg_volume.flatten(),
         rsi,
         bollinger_bands.flatten(),
+        macd.flatten(),
         vwap,
         volume_oscillator
     ])
@@ -178,10 +209,11 @@ def main():
         'RandomForest': RandomForestRegressor(),
         'GradientBoosting': GradientBoostingRegressor(),
         'XGBoost': XGBRegressor(),
+        'LightGBM': LGBMRegressor(),
         'LinearRegression': LinearRegression()
     }
 
-    # Define hyperparameter grids for XGBoost
+    # Define hyperparameter grids for XGBoost and LightGBM
     param_grids = {
         'XGBoost': {
             'n_estimators': [100, 200, 300],
@@ -189,7 +221,14 @@ def main():
             'max_depth': [3, 5, 7],
             'subsample': [0.8, 1.0]
         },
-        # Add grids for other models if needed
+        'LightGBM': {
+            'n_estimators': [100, 200, 300],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'num_leaves': [31, 50, 100],
+            'feature_fraction': [0.8, 1.0],
+            'reg_alpha': [0, 0.1, 0.5],  # L1 regularization
+            'reg_lambda': [0, 0.1, 0.5]  # L2 regularization
+        }
     }
 
     # Store the results for predicted vs. actual volatilities
@@ -199,12 +238,12 @@ def main():
     for name, model in models.items():
         print(f"Running model: {name}")
 
-        # If the model has hyperparameters to tune, use GridSearchCV
+        # If the model has hyperparameters to tune, use RandomizedSearchCV
         if name in param_grids:
-            grid_search = GridSearchCV(model, param_grids[name], cv=5, scoring='neg_mean_squared_error')
-            grid_search.fit(X_train, y_train)
-            best_model = grid_search.best_estimator_
-            print(f"Best hyperparameters for {name}: {grid_search.best_params_}")
+            random_search = RandomizedSearchCV(model, param_grids[name], n_iter=10, cv=5, scoring='neg_mean_squared_error', random_state=42)
+            random_search.fit(X_train, y_train)
+            best_model = random_search.best_estimator_
+            print(f"Best hyperparameters for {name}: {random_search.best_params_}")
         else:
             # If no hyperparameters to tune, fit the model directly
             best_model = model.fit(X_train, y_train)
@@ -238,8 +277,3 @@ def main():
     print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
 
 main()
-
-
-
-
-
