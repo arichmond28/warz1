@@ -1,13 +1,12 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew, kurtosis
-from sklearn.model_selection import train_test_split, GridSearchCV, cross_val_score
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, ExtraTreesRegressor, BaggingRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.feature_selection import RFE
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from sklearn.model_selection import KFold
+from xgboost import XGBRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, BaggingRegressor, ExtraTreesRegressor
+from sklearn.linear_model import LinearRegression
 
 # Function to calculate basic statistics
 def calculate_statistics(prices):
@@ -32,16 +31,10 @@ def calculate_price_movement(open_prices, close_prices):
 
 # Function to calculate stock price volatility using standard deviation of log returns
 def calculate_volatility(prices, annualized=True, periods_per_year=252):
-    # Calculate log returns
     log_returns = np.diff(np.log(prices))
-    
-    # Calculate standard deviation of log returns
     volatility = np.std(log_returns)
-    
-    # Annualize the volatility if required
-    if annualized:
+    if annualized.all():
         volatility *= np.sqrt(periods_per_year)
-    
     return volatility
 
 # Function to calculate moving averages
@@ -82,7 +75,6 @@ def calculate_volume_oscillator(volumes, short_window=5, long_window=10):
 
 # Function to process a single chunk
 def process_chunk(chunk):
-    # Split the chunk into respective features
     open_prices = chunk[:, 0]
     high_prices = chunk[:, 1]
     low_prices = chunk[:, 2]
@@ -90,7 +82,6 @@ def process_chunk(chunk):
     adj_close_prices = chunk[:, 4]
     volumes = chunk[:, 5]
     
-    # Calculate stats for each feature
     open_stats = calculate_statistics(open_prices)
     high_stats = calculate_statistics(high_prices)
     low_stats = calculate_statistics(low_prices)
@@ -98,22 +89,17 @@ def process_chunk(chunk):
     adj_close_stats = calculate_statistics(adj_close_prices)
     volume_stats = calculate_statistics(volumes)
     
-    # Calculate price movements
     price_movement = calculate_price_movement(open_prices, close_prices)
     
-    # Calculate moving averages (e.g., 5-day)
     moving_avg_close = calculate_moving_average(close_prices, 5)
     moving_avg_volume = calculate_moving_average(volumes, 5)
     
-    # Calculate technical indicators
     rsi = calculate_rsi(close_prices, window_size=10)
     bollinger_bands = calculate_bollinger_bands(close_prices, window_size=10, num_std_dev=2)
     vwap = calculate_vwap(close_prices, volumes)
     
-    # Volume oscillator
     volume_oscillator = calculate_volume_oscillator(volumes, short_window=5, long_window=10)
     
-    # Concatenate all statistics into a single vector
     all_statistics = np.hstack([
         open_stats,
         high_stats,
@@ -137,82 +123,73 @@ def main():
     # Read the CSV file
     df = pd.read_csv('AAPL.csv')
 
-    # Determine the number of chunks
     num_chunks = len(df) // 10
 
-    # Drop the first column if it's not needed (like a date column)
     date_column = df.columns[0]
     dates = df[date_column]
     df = df.drop(df.columns[0], axis=1)
 
-    # Initialize lists to store calculated data
     all_statistics_arrays = []
     volatilities = []
     date_ranges = []
 
-    # Precompute volatilities for the entire dataset
-    for i in range(num_chunks - 1):  # Exclude the last chunk since there's no subsequent period
-        # Slice the dataframe to get 10 rows and convert them to a numpy array
+    for i in range(num_chunks - 1):
         chunk = df.iloc[i*10:(i+1)*10].values
         next_chunk = df.iloc[(i+1)*10:(i+2)*10].values
 
-        # Process the chunk and calculate all statistics except volatility
         statistics_vector = process_chunk(chunk)
         all_statistics_arrays.append(statistics_vector)
         
-        # Calculate and store volatility for the subsequent 10-day period
         high_prices = next_chunk[:, 1]
         low_prices = next_chunk[:, 2]
         volatility = calculate_volatility(high_prices, low_prices)
         volatilities.append(volatility)
         
-        # Store the date range for this chunk (corresponding to the period used to calculate features)
         start_date = dates.iloc[i*10]
         end_date = dates.iloc[(i+1)*10 - 1]
         date_ranges.append(f"{start_date} to {end_date}")
 
-    # Convert lists to numpy arrays
     all_statistics_matrix = np.array(all_statistics_arrays)
     volatility_vector = np.array(volatilities)
 
-    # Initialize a list for the final feature vectors (features + label)
     feature_vectors = []
-
-    # Build feature vectors with [features... label]
     for i in range(len(all_statistics_matrix)):
         features = all_statistics_matrix[i]
         label = volatility_vector[i]
         feature_vector = np.hstack([features, label])
         feature_vectors.append(feature_vector)
 
-    # Convert the list of feature vectors to a numpy array
     feature_matrix = np.array(feature_vectors)
 
-    # Split feature matrix into features (X) and labels (y)
-    X = feature_matrix[:, :-1]  # All columns except the last (features)
-    y = feature_matrix[:, -1]   # The last column (label)
+    X = feature_matrix[:, :-1]
+    y = feature_matrix[:, -1]
 
-    # Split data into training and testing sets (80% train, 20% test), with a fixed random state
+    # Scale features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Split data into training and testing sets
     X_train, X_test, y_train, y_test, date_train, date_test = train_test_split(
-        X, y, date_ranges, test_size=0.2, random_state=42
+        X_scaled, y, date_ranges, test_size=0.2, random_state=42
     )
 
     # Models to evaluate
     models = {
-        'DecisionTree': DecisionTreeRegressor(),
         'RandomForest': RandomForestRegressor(),
         'GradientBoosting': GradientBoostingRegressor(),
-        'AdaBoost': AdaBoostRegressor(),
-        'Bagging': BaggingRegressor(),
-        'ExtraTrees': ExtraTreesRegressor(),
+        'XGBoost': XGBRegressor(),
         'LinearRegression': LinearRegression()
     }
 
-    # Define hyperparameter grids for each model (you can expand this as needed)
+    # Define hyperparameter grids for XGBoost
     param_grids = {
-        'DecisionTree': {'max_depth': [10, 20, None], 'min_samples_split': [2, 5, 10]},
-        'RandomForest': {'n_estimators': [50, 100, 200], 'max_depth': [10, 20, None]},
-        # Add more parameter grids as needed for each model
+        'XGBoost': {
+            'n_estimators': [100, 200, 300],
+            'learning_rate': [0.01, 0.1, 0.2],
+            'max_depth': [3, 5, 7],
+            'subsample': [0.8, 1.0]
+        },
+        # Add grids for other models if needed
     }
 
     # Store the results for predicted vs. actual volatilities
@@ -229,7 +206,7 @@ def main():
             best_model = grid_search.best_estimator_
             print(f"Best hyperparameters for {name}: {grid_search.best_params_}")
         else:
-            # If no hyperparameters to tune (e.g., LinearRegression), just fit the model
+            # If no hyperparameters to tune, fit the model directly
             best_model = model.fit(X_train, y_train)
 
         # Make predictions using the trained model
@@ -261,6 +238,7 @@ def main():
     print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
 
 main()
+
 
 
 
