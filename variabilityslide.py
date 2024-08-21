@@ -30,10 +30,19 @@ def calculate_price_movement(open_prices, close_prices):
     percent_change = (absolute_change / open_prices[0]) * 100
     return np.array([absolute_change, percent_change])
 
-# Function to calculate volatility
-def calculate_volatility(high_prices, low_prices):
-    daily_range_volatility = np.mean(high_prices - low_prices)
-    return daily_range_volatility
+# Function to calculate stock price volatility using standard deviation of log returns
+def calculate_volatility(prices, annualized=True, periods_per_year=252):
+    # Calculate log returns
+    log_returns = np.diff(np.log(prices))
+    
+    # Calculate standard deviation of log returns
+    volatility = np.std(log_returns)
+    
+    # Annualize the volatility if required
+    if annualized:
+        volatility *= np.sqrt(periods_per_year)
+    
+    return volatility
 
 # Function to calculate moving averages
 def calculate_moving_average(prices, window_size):
@@ -250,7 +259,7 @@ def main():
     results_df.to_csv("predicted_vs_actual_volatility_optimized.csv", index=False)
 
     print("Predicted vs Actual volatilities saved to 'predicted_vs_actual_volatility_optimized.csv'.")
-    
+
 main()
 
 
